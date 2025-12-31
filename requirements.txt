@@ -9,3 +9,4 @@ watchdog
 sniffio
 httpx
 typing_extensions
+onnxruntime
