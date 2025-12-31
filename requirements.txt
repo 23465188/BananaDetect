@@ -6,3 +6,6 @@ plotly
 rembg
 pillow
 watchdog
+sniffio
+httpx
+typing_extensions
