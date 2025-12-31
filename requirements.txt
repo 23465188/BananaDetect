@@ -1,0 +1,8 @@
+streamlit
+zhipuai
+opencv-python-headless
+numpy
+plotly
+rembg
+pillow
+watchdog
