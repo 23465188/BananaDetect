@@ -63,12 +63,22 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# API 初始化
+# API 初始化 (这里从 secrets 读取 key)
 try:
-    API_KEY = st.secrets["zhipu_api_key"]
-    client = ZhipuAI(api_key=API_KEY)
+    # 兼容两种写法，防止报错
+    if "zhipu_api_key" in st.secrets:
+        API_KEY = st.secrets["zhipu_api_key"]
+    elif "ZHIPU_API_KEY" in st.secrets:
+        API_KEY = st.secrets["ZHIPU_API_KEY"]
+    else:
+        API_KEY = None
+
+    if API_KEY:
+        client = ZhipuAI(api_key=API_KEY)
+    else:
+        client = None
 except Exception:
-    pass
+    client = None
 
 
 # ================= 2. 核心算法 (V50 固化内核) =================
@@ -86,6 +96,10 @@ def opencv_engine(pil_image):
         return pil_image, 0, 0, 0, 0, 0, 0.0
 
     img_rgba = np.array(nobg_pil)
+    # 防止空图报错
+    if img_rgba.ndim != 3 or img_rgba.shape[2] != 4:
+        return pil_image, 0, 0, 0, 0, 0, 0.0
+
     base_mask = (img_rgba[:, :, 3] > 20).astype(np.uint8) * 255
     kernel = np.ones((3, 3), np.uint8)
     banana_mask = cv2.erode(base_mask, kernel, iterations=2)
@@ -230,9 +244,15 @@ if target_file:
     if 'last_id' not in st.session_state or st.session_state.last_id != target_file.file_id:
         st.session_state.last_id = target_file.file_id
         with st.spinner("⚡ 正在分析..."):
+            # 防止 RGBA 错误
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
             cv_img, g, y, b, max_b, max_e, surv = opencv_engine(img)
             st.session_state.data = (g, y, b, max_b, max_e, surv)
             st.session_state.res_img = cv_img
+            # 每次新图片也清空一下旧的 AI 评价，强制刷新
+            if 'ai_comment' in st.session_state:
+                del st.session_state.ai_comment
 
     with col1:
         # 电脑端并排，手机端自动变上面
@@ -278,3 +298,45 @@ if target_file:
                 """, unsafe_allow_html=True)
                 st.plotly_chart(get_radar_chart(visual_score, touch_score, smell_score, score, safety_score),
                                 use_container_width=True)
+
+            # ================= 5. AI 鉴赏师模块 (接在雷达图后面) =================
+            st.markdown("### 🎩 AI 鉴赏师点评")
+
+            if client:
+                # 只有当没有缓存的评论时才请求，节省Token
+                if 'ai_comment' not in st.session_state:
+                    try:
+                        img_b64 = encode_img(st.session_state.res_img)  # 使用去背景后的图给AI看
+                        prompt = f"""
+                        你是一位幽默毒舌但专业的水果鉴赏家。
+                        OpenCV检测数据：【{grade}】，评分【{score}分】。
+                        请根据图片和数据，用一两句风趣的话点评。
+                        如果是好香蕉就浮夸地夸，如果是烂香蕉就幽默警示，如果是青香蕉就调侃。
+                        """
+                        with st.spinner("🤖 AI 鉴赏师正在整理毒舌语录..."):
+                            response = client.chat.completions.create(
+                                model="glm-4v",
+                                messages=[
+                                    {"role": "user", "content": [
+                                        {"type": "text", "text": prompt},
+                                        {"type": "image_url", "image_url": {"url": img_b64}}
+                                    ]}
+                                ]
+                            )
+                            st.session_state.ai_comment = response.choices[0].message.content
+                    except Exception as e:
+                        st.caption(f"AI 连接波动: {e}")
+
+                # 显示评论 (金边黑底 V60 样式)
+                if 'ai_comment' in st.session_state:
+                    st.markdown(
+                        f"""
+                        <div style="background-color:#2b2b2b;padding:20px;border-radius:10px;border-left:5px solid #FFC107;">
+                            <p style="font-size:16px;font-style:italic;color:#E0E0E0">“{st.session_state.ai_comment}”</p>
+                            <p style="text-align:right;font-size:12px;color:#888;">—— 智谱 GLM-4V</p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+            else:
+                st.caption("🔒 鉴赏师未上线 (请配置 Secrets: zhipu_api_key)")
